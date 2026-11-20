@@ -9,11 +9,11 @@ A first-person FPV quad simulator that runs directly on the RadioMaster Pocket's
 3. Use a simulator model with both RF modules off. Press **SYS**, select **ParqFpV** in **Tools**, and press the scroll wheel to open it.
 4. Select **Bando freestyle** or **Gate race**, lower the throttle, then press the wheel to start.
 
-The scroll wheel selects menu items and its click confirms. **RTN** pauses in flight and goes back in menus. The pause menu lets you resume or restart. After a crash, press the wheel to retry. The game reads the radio's logical roll, pitch, yaw and throttle, so the stick layout follows your radio's stick mode. The **Stick setup** page shows live values and can reverse pitch or throttle for the session.
+The scroll wheel selects menu items and its click confirms. **RTN** pauses in flight and goes back in menus. Impacts stop motion into the surface and let you keep flying from where you hit. To reset manually, press **RTN** and select **Restart**. The game reads the radio's logical roll, pitch, yaw and throttle, so the stick layout follows your radio's stick mode. The **Stick setup** page shows live values and can reverse pitch or throttle for the session.
 
 ## Fly Ironworks
 
-Fly through the warehouse loading bays, between containers and columns, under the raised concrete floor, or over the roof beams in **Bando freestyle**. The HUD shows altitude, speed and throttle. On a first flight, try **65mm Whoop** in **Angle**. Raise the throttle toward 45% for level hover, then use small stick movements. **Acro** commands rotation rates and allows flips and rolls.
+Fly through the warehouse loading bays, between containers and columns, under the raised concrete floor, or over the roof beams in **Bando freestyle**. The HUD shows altitude, speed and throttle. **Acro** is the default and commands rotation rates for flips and rolls. Select **Flight: Acro** in the main menu to switch to **Angle**. With the **65mm Whoop**, raise the throttle toward 45% for level hover, then use small stick movements.
 
 | Quad | Flight feel |
 | --- | --- |

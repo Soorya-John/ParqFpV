@@ -59,7 +59,7 @@ box(-15,0,8,-13,3,12)
 
 local state, row, quad, assist, invertPitch, reverseThrottle
 local racing, gateIndex, lap, lapStart, raceTime, bestLap, resultPB, savedPB
-local screenStart, frameTime, countStart, crashText
+local screenStart, frameTime, countStart
 local x,y,z, vx,vy,vz, qw,qx,qy,qz
 local spawnX, spawnZ
 local stickIds = {}
@@ -79,7 +79,7 @@ local function drawLine(x1,y1,x2,y2,pattern)
 end
 
 -- Clip projected lines against the viewport before calling the LCD API.
-local function screenLine(ax,ay,bx,by,pattern)
+local function screenLine(ax,ay,bx,by,pattern,bold)
   if (ax<0 and bx<0) or (ax>127 and bx>127)
     or (ay<8 and by<8) or (ay>55 and by>55) then return end
   if ax<0 or ax>127 then
@@ -100,6 +100,15 @@ local function screenLine(ax,ay,bx,by,pattern)
     bx,by = bx+(ax-bx)*(edge-by)/(ay-by),edge
   end
   drawLine(ax,ay,bx,by,pattern)
+  if bold then
+    if abs(bx-ax)>=abs(by-ay) then
+      local offset = max(ay,by)>=54.5 and -1 or 1
+      drawLine(ax,clamp(ay+offset,8,55),bx,clamp(by+offset,8,55),pattern)
+    else
+      local offset = max(ax,bx)>=126.5 and -1 or 1
+      drawLine(clamp(ax+offset,0,127),ay,clamp(bx+offset,0,127),by,pattern)
+    end
+  end
 end
 
 local function cameraPoint(px,py,pz)
@@ -109,7 +118,7 @@ local function cameraPoint(px,py,pz)
          px*camFwX+py*camFwY+pz*camFwZ
 end
 
-local function edge(ax,ay,az,bx,by,bz,pattern)
+local function edge(ax,ay,az,bx,by,bz,pattern,bold)
   if (az<NEAR and bz<NEAR) or (az>FAR and bz>FAR) then return end
   if az<NEAR or az>FAR then
     local depth = clamp(az,NEAR,FAR)
@@ -122,7 +131,11 @@ local function edge(ax,ay,az,bx,by,bz,pattern)
     bx,by,bz = bx+(ax-bx)*t,by+(ay-by)*t,depth
   end
   local sa,sb = FOCAL/az,FOCAL/bz
-  screenLine(64+ax*sa,32-ay*sa,64+bx*sb,32-by*sb,pattern)
+  screenLine(64+ax*sa,32-ay*sa,64+bx*sb,32-by*sb,pattern,bold)
+end
+
+local function structureEdge(ax,ay,az,bx,by,bz)
+  edge(ax,ay,az,bx,by,bz,SOLID,not racing)
 end
 
 local function worldLine(ax,ay,az,bx,by,bz,pattern)
@@ -160,20 +173,20 @@ local function drawBox(b)
   local tx,ty,tz = (b[5]-b[2])*camRightY,(b[5]-b[2])*camUpY,(b[5]-b[2])*camFwY
   local left,right,front,back = x<b[1],x>b[4],z<b[3],z>b[6]
   local top,bottom = y>b[5],y<b[2]
-  if front or bottom then edge(ax,ay,az,bx,by,bz) end
-  if right or bottom then edge(bx,by,bz,cx,cy,cz) end
-  if back or bottom then edge(cx,cy,cz,dx,dy,dz) end
-  if left or bottom then edge(dx,dy,dz,ax,ay,az) end
-  if left or front then edge(ax,ay,az,ax+tx,ay+ty,az+tz) end
-  if right or front then edge(bx,by,bz,bx+tx,by+ty,bz+tz) end
-  if right or back then edge(cx,cy,cz,cx+tx,cy+ty,cz+tz) end
-  if left or back then edge(dx,dy,dz,dx+tx,dy+ty,dz+tz) end
+  if front or bottom then structureEdge(ax,ay,az,bx,by,bz) end
+  if right or bottom then structureEdge(bx,by,bz,cx,cy,cz) end
+  if back or bottom then structureEdge(cx,cy,cz,dx,dy,dz) end
+  if left or bottom then structureEdge(dx,dy,dz,ax,ay,az) end
+  if left or front then structureEdge(ax,ay,az,ax+tx,ay+ty,az+tz) end
+  if right or front then structureEdge(bx,by,bz,bx+tx,by+ty,bz+tz) end
+  if right or back then structureEdge(cx,cy,cz,cx+tx,cy+ty,cz+tz) end
+  if left or back then structureEdge(dx,dy,dz,dx+tx,dy+ty,dz+tz) end
   ax,ay,az,bx,by,bz = ax+tx,ay+ty,az+tz,bx+tx,by+ty,bz+tz
   cx,cy,cz,dx,dy,dz = cx+tx,cy+ty,cz+tz,dx+tx,dy+ty,dz+tz
-  if front or top then edge(ax,ay,az,bx,by,bz) end
-  if right or top then edge(bx,by,bz,cx,cy,cz) end
-  if back or top then edge(cx,cy,cz,dx,dy,dz) end
-  if left or top then edge(dx,dy,dz,ax,ay,az) end
+  if front or top then structureEdge(ax,ay,az,bx,by,bz) end
+  if right or top then structureEdge(bx,by,bz,cx,cy,cz) end
+  if back or top then structureEdge(cx,cy,cz,dx,dy,dz) end
+  if left or top then structureEdge(dx,dy,dz,ax,ay,az) end
 end
 
 local function drawGate(g, active)
@@ -199,7 +212,8 @@ end
 local function renderWorld()
   camera()
   local gx,gz = floor(x/5)*5,floor(z/5)*5
-  for offset=-15,20,5 do
+  local spacing = racing and 5 or 10
+  for offset=racing and -15 or -10,20,spacing do
     worldLine(gx+offset,0,gz-15,gx+offset,0,gz+20,DOTTED)
     worldLine(gx-15,0,gz+offset,gx+20,0,gz+offset,DOTTED)
   end
@@ -279,6 +293,26 @@ local function gateCrossing(ox,oy,oz)
   end
 end
 
+-- Sweep one axis at a time so contact stops normal motion and preserves sliding.
+local function moveAxis(position, velocity, dt, radius, low, high, axis, cross1, p1, cross2, p2)
+  if velocity==0 then return position,0 end
+  local target = clamp(position+velocity*dt,low,high)
+  local blocked = target==low or target==high
+  for i=1,#boxes do
+    local b = boxes[i]
+    if p1>b[cross1]-radius and p1<b[cross1+3]+radius
+      and p2>b[cross2]-radius and p2<b[cross2+3]+radius then
+      local near,far = b[axis]-radius,b[axis+3]+radius
+      if velocity>0 and position<=near and target>=near then
+        target,blocked = near,true
+      elseif velocity<0 and position>=far and target<=far then
+        target,blocked = far,true
+      end
+    end
+  end
+  return target,blocked and 0 or velocity
+end
+
 local function physics(dt, throttle, roll, pitch, yaw)
   local spec = quads[quad]
   local onGround = y<=spec.radius and throttle*spec.thrust<=9.81
@@ -309,26 +343,12 @@ local function physics(dt, throttle, roll, pitch, yaw)
   local drag = spec.drag+0.037*sqrt(vx*vx+vy*vy+vz*vz)
   vx,vy,vz = vx+(uX*thrust-vx*drag)*dt,vy+(uY*thrust-9.81-vy*drag)*dt,vz+(uZ*thrust-vz*drag)*dt
   local ox,oy,oz = x,y,z
-  x,y,z = x+vx*dt,y+vy*dt,z+vz*dt
   local radius = spec.radius
+  x,vx = moveAxis(x,vx,dt,radius,-23,40,1,2,y,3,z)
+  z,vz = moveAxis(z,vz,dt,radius,-16,46,3,1,x,2,y)
+  y,vy = moveAxis(y,vy,dt,radius,radius,28,2,1,x,3,z)
   if y<=radius then
-    if vy < -3.8 or uY<0.62 then
-      state,crashText = "crash","GROUND IMPACT"
-      return
-    end
-    y,vy,vx,vz = radius,0,vx*0.65,vz*0.65
-  end
-  if x < -23 or x > 40 or z < -16 or z > 46 or y > 28 then
-    state,crashText = "crash","OUT OF BOUNDS"
-    return
-  end
-  for i=1,#boxes do
-    local b = boxes[i]
-    if x+radius>b[1] and x-radius<b[4] and y+radius>b[2] and y-radius<b[5]
-      and z+radius>b[3] and z-radius<b[6] then
-      state,crashText = "crash","STRUCTURE HIT"
-      return
-    end
+    vx,vz = vx*0.65,vz*0.65
   end
   if racing then gateCrossing(ox,oy,oz) end
 end
@@ -346,30 +366,9 @@ local function panel(title, subtitle, detail)
   if detail then label(10,42,detail,small) end
 end
 
-local titleGlyphs = {
-  {30,17,17,30,16,16,16}, -- P
-  {0,0,14,1,15,17,15},    -- a
-  {0,0,22,25,16,16,16},   -- r
-  {0,0,15,17,17,15,1,1},  -- q
-  {31,16,16,30,16,16,16}, -- F
-  {0,0,30,17,17,30,16,16},-- p
-  {17,17,17,17,17,10,4},  -- V
-}
-
 local function splash()
+  label(29,16,"ParqFpV",DBLSIZE or 0)
   drawLine(8,35,120,35,DOTTED)
-  for i=1,#titleGlyphs do
-    local glyph = titleGlyphs[i]
-    for gy=1,#glyph do
-      local bits = glyph[gy]
-      for gx=4,0,-1 do
-        if bits%2==1 then
-          fill(20+(i-1)*13+(4-gx)*2+floor((8-gy)/3),15+gy*2,2,2,ink)
-        end
-        bits = floor(bits/2)
-      end
-    end
-  end
   drawLine(16,35,31,39)
   drawLine(31,39,64,44)
   drawLine(64,44,97,39)
@@ -431,7 +430,7 @@ local function init()
     local hx,hy,hz = (b[4]-b[1])*0.5,(b[5]-b[2])*0.5,(b[6]-b[3])*0.5
     b[7],b[8],b[9],b[10] = b[1]+hx,b[2]+hy,b[3]+hz,sqrt(hx*hx+hy*hy+hz*hz)
   end
-  state,row,quad,assist = "splash",1,1,true
+  state,row,quad,assist = "splash",1,1,false
   invertPitch,reverseThrottle = false,false
   screenStart,savedPB = getTime(),readPB()
 end
@@ -499,7 +498,7 @@ local function run(event)
     if exit or (enter and row==1) then state,frameTime = "fly",now
     elseif enter and row==2 then prepare(racing,now)
     elseif enter and row==3 then state,row = "menu",racing and 2 or 1 end
-  elseif state=="crash" or state=="result" then
+  elseif state=="result" then
     if exit then state,row = "menu",racing and 2 or 1
     elseif enter then prepare(racing,now) end
   end
@@ -531,8 +530,6 @@ local function run(event)
       label(27,23,"Resume",small+(row==1 and inverse or 0))
       label(27,32,"Restart",small+(row==2 and inverse or 0))
       label(27,41,"Main menu",small+(row==3 and inverse or 0))
-    elseif state=="crash" then
-      panel("QUAD DOWN",crashText,"ENT Retry   RTN Menu")
     end
   end
   return 0
