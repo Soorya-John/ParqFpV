@@ -60,9 +60,22 @@ box(-15,0,8,-13,3,12)
 local state, row, quad, assist, invertPitch, reverseThrottle
 local racing, gateIndex, lap, lapStart, raceTime, bestLap, resultPB, savedPB
 local screenStart, frameTime, countStart
+local drill, drillGate, drillBest, drillRecord
+local motor, rollRate, pitchRate, yawRate
+local lapMarks, bestMarks, splitText, splitUntil
 local x,y,z, vx,vy,vz, qw,qx,qy,qz
 local spawnX, spawnZ
 local stickIds = {}
+local useChannels
+local function bindControls(channels)
+  useChannels = channels
+  -- Internal axis order is yaw, pitch, throttle, roll.
+  local names = channels and {"ch4","ch2","ch3","ch1"} or {"rud","ele","thr","ail"}
+  for i=1,4 do
+    local info = getFieldInfo(names[i])
+    stickIds[i] = info and info.id or names[i]
+  end
+end
 local camRightX,camRightY,camRightZ, camUpX,camUpY,camUpZ, camFwX,camFwY,camFwZ
 local rX,rY,rZ, uX,uY,uZ, fX,fY,fZ
 local camCos, camSin
@@ -203,26 +216,35 @@ local function drawGate(g, active)
     if cz>NEAR and cz<FAR then
       local sx,sy = floor(61+FOCAL*cx/cz),floor(25-FOCAL*cy/cz)
       if sx>=0 and sx<121 and sy>=8 and sy<55 then label(sx,sy,tostring(gateIndex),small+inverse) end
-    else
-      label(57,12,"TURN",small+inverse)
+    end
+    -- Bearing to the gate centre, including targets behind the pilot.
+    cx,cy,cz = cameraPoint(gx,gy,gz)
+    if cz<NEAR or abs(cx)*FOCAL>59*cz or abs(cy)*FOCAL>19*cz then
+      local side = cx>=0 and 1 or -1
+      local dx,dy = side,0
+      if cz>=NEAR and abs(cy)*59>abs(cx)*19 then dx,dy=0,(cy>0 and -1 or 1) end
+      local sx,sy = 64+dx*58,32+dy*18
+      drawLine(sx,sy,sx-4*dx+3*dy,sy-4*dy+3*dx)
+      drawLine(sx,sy,sx-4*dx-3*dy,sy-4*dy-3*dx)
+      if cz<=0 then drawLine(sx-6*dx,sy-2,sx-6*dx,sy+2) end
     end
   end
 end
 
 local function renderWorld()
   camera()
-  local gx,gz = floor(x/5)*5,floor(z/5)*5
-  local spacing = racing and 5 or 10
-  for offset=racing and -15 or -10,20,spacing do
-    worldLine(gx+offset,0,gz-15,gx+offset,0,gz+20,DOTTED)
-    worldLine(gx-15,0,gz+offset,gx+20,0,gz+offset,DOTTED)
+  local spacing = (racing or drill) and 5 or 10
+  local gx,gz = floor(x/spacing)*spacing,floor(z/spacing)*spacing
+  for offset=-20,20,spacing do
+    worldLine(gx+offset,0,gz-20,gx+offset,0,gz+20,DOTTED)
+    worldLine(gx-20,0,gz+offset,gx+20,0,gz+offset,DOTTED)
   end
   for i=1,#boxes do drawBox(boxes[i]) end
   if racing then
     local nextGate = gateIndex % #gates + 1
     drawGate(gates[nextGate],false)
-    drawGate(gates[gateIndex],true)
   end
+  if racing or drill then drawGate(gates[gateIndex],true) end
   drawLine(59,32,62,32)
   drawLine(66,32,69,32)
   drawLine(64,34,64,36)
@@ -257,12 +279,22 @@ end
 local function resetPose()
   x,y,z = spawnX,quads[quad].radius,spawnZ
   vx,vy,vz = 0,0,0
+  motor,rollRate,pitchRate,yawRate = 0,0,0,0
   qw,qx,qy,qz = 1,0,0,0
+  if drill then
+    local g = gates[gateIndex]
+    x,y,z = g[1]-7*g[6],g[2],g[3]-7*g[7]
+    local heading = g[7]==-1 and math.pi or g[6]*math.pi/2
+    qw,qy = cos(heading/2),sin(heading/2)
+    motor = 9.81/quads[quad].thrust
+  end
   basis()
 end
 
-local function prepare(isRace,now)
-  racing,gateIndex,lap = isRace,1,1
+local function prepare(isRace,now,isDrill)
+  racing,drill,lap = isRace,isDrill,1
+  gateIndex = drill and drillGate or 1
+  lapMarks,bestMarks,splitText,splitUntil = {},{},nil,0
   lapStart,raceTime,bestLap,resultPB = 0,0,0,false
   spawnX,spawnZ = 0,(racing and -7 or 2)
   local angle = quads[quad].cam*math.pi/180
@@ -279,10 +311,25 @@ local function gateCrossing(ox,oy,oz)
   local t = -before/(after-before)
   local crossX,crossY,crossZ = ox+(x-ox)*t,oy+(y-oy)*t,oz+(z-oz)*t
   if abs((crossX-g[1])*nz-(crossZ-g[3])*nx)>g[4] or abs(crossY-g[2])>g[5] then return end
+  if drill then
+    local key = (quad-1)*#gates+gateIndex+(assist and #quads*#gates or 0)
+    drillRecord = min(drillBest[key] or raceTime,raceTime)
+    drillBest[key],state = drillRecord,"drillResult"
+    return
+  end
+  local split = raceTime-lapStart
+  lapMarks[gateIndex] = split
+  if bestMarks[gateIndex] then
+    splitText = string.format("G%d  %+.2fs",gateIndex,split-bestMarks[gateIndex])
+  else
+    splitText = string.format("G%d  %.2fs",gateIndex,split)
+  end
+  splitUntil = raceTime+1.4
   gateIndex = gateIndex+1
   if gateIndex<=#gates then return end
-  local split = raceTime-lapStart
-  if bestLap==0 or split<bestLap then bestLap=split end
+  if bestLap==0 or split<bestLap then
+    bestLap,bestMarks,lapMarks = split,lapMarks,bestMarks
+  end
   lapStart,gateIndex,lap = raceTime,1,lap+1
   if lap>LAPS then
     state = "result"
@@ -315,8 +362,11 @@ end
 
 local function physics(dt, throttle, roll, pitch, yaw)
   local spec = quads[quad]
-  local onGround = y<=spec.radius and throttle*spec.thrust<=9.81
+  -- First-order motor and rate response at the fixed 50 Hz physics tick.
+  motor = motor+(throttle-motor)*(throttle>motor and 0.32 or 0.23)
+  local onGround = y<=spec.radius and motor*spec.thrust<=9.81
   if onGround then
+    rollRate,pitchRate,yawRate = 0,0,0
     roll,pitch,yaw = 0,0,0
   end
   if assist and not onGround then
@@ -331,7 +381,10 @@ local function physics(dt, throttle, roll, pitch, yaw)
     qx,qz = 0,0
     if abs(qw)+abs(qy)<0.001 then qw,qy = 1,0 end
   end
-  local a,b,c = pitch*dt*0.5,yaw*spec.yaw*dt*0.5,-roll*dt*0.5
+  rollRate = rollRate+(roll-rollRate)*0.40
+  pitchRate = pitchRate+(pitch-pitchRate)*0.40
+  yawRate = yawRate+(yaw*spec.yaw-yawRate)*0.30
+  local a,b,c = pitchRate*dt*0.5,yawRate*dt*0.5,-rollRate*dt*0.5
   local nw = qw-qx*a-qy*b-qz*c
   local nx = qx+qw*a+qy*c-qz*b
   local ny = qy+qw*b+qz*a-qx*c
@@ -339,7 +392,7 @@ local function physics(dt, throttle, roll, pitch, yaw)
   local norm = 1/sqrt(nw*nw+nx*nx+ny*ny+nz*nz)
   qw,qx,qy,qz = nw*norm,nx*norm,ny*norm,nz*norm
   basis()
-  local thrust = throttle*spec.thrust
+  local thrust = motor*spec.thrust
   local drag = spec.drag+0.037*sqrt(vx*vx+vy*vy+vz*vz)
   vx,vy,vz = vx+(uX*thrust-vx*drag)*dt,vy+(uY*thrust-9.81-vy*drag)*dt,vz+(uZ*thrust-vz*drag)*dt
   local ox,oy,oz = x,y,z
@@ -350,7 +403,7 @@ local function physics(dt, throttle, roll, pitch, yaw)
   if y<=radius then
     vx,vz = vx*0.65,vz*0.65
   end
-  if racing then gateCrossing(ox,oy,oz) end
+  if racing or drill then gateCrossing(ox,oy,oz) end
 end
 
 local function formatTime(seconds)
@@ -373,7 +426,7 @@ local function splash()
   drawLine(31,39,64,44)
   drawLine(64,44,97,39)
   drawLine(97,39,112,35)
-  label(19,49,"POCKET FPV SIMULATOR",small)
+  label(19,49,"IRONWORKS / FPV SIM",small)
   label(42,57,"PRESS ENT",small)
 end
 
@@ -390,14 +443,16 @@ local function menu()
   menuItem(3,"Quad: "..quads[quad].name)
   menuItem(4,assist and "Flight: Angle" or "Flight: Acro")
   menuItem(5,"Stick setup")
-  label(2,53,"Race PB "..formatTime(savedPB),small)
+  menuItem(6,"Gate practice")
+  label(2,57,"Race PB "..formatTime(savedPB),small)
 end
 
 local function settings()
   label(2,0,"STICK SETUP",small+inverse)
   menuItem(1,invertPitch and "Pitch: Reversed" or "Pitch: Normal")
   menuItem(2,reverseThrottle and "Throttle: Reversed" or "Throttle: Normal")
-  menuItem(3,"Back")
+  menuItem(3,useChannels and "Inputs: CH1-4 AETR" or "Inputs: Radio sticks")
+  menuItem(4,"Back")
   local throttle = (1+stick(3)) * 50
   if reverseThrottle then throttle=100-throttle end
   label(2,44,string.format("THR %d%%  YAW %d",floor(throttle),floor(stick(1)*100)),small)
@@ -410,6 +465,10 @@ local function hud(throttle)
   if racing then
     label(0,0,string.format("L%d/%d  G%d/%d",min(lap,LAPS),LAPS,gateIndex,#gates),small)
     label(84,0,formatTime(raceTime),small)
+    if splitText and raceTime<splitUntil then label(2,9,splitText,small+inverse) end
+  elseif drill then
+    label(0,0,"PRACTICE  G"..gateIndex,small)
+    label(84,0,formatTime(raceTime),small)
   else
     label(0,0,"IRONWORKS",small)
     label(88,0,assist and "ANGLE" or "ACRO",small)
@@ -420,17 +479,15 @@ local function hud(throttle)
 end
 
 local function init()
-  local sources = {"rud","ele","thr","ail"}
-  for i=1,#sources do
-    local info = getFieldInfo(sources[i])
-    stickIds[i] = info and info.id or sources[i]
-  end
+  local _,radio = getVersion()
+  bindControls(string.find(string.lower(radio or ""),"mt12",1,true)~=nil)
+  drillGate,drillBest = 1,{}
   for i=1,#boxes do
     local b = boxes[i]
     local hx,hy,hz = (b[4]-b[1])*0.5,(b[5]-b[2])*0.5,(b[6]-b[3])*0.5
     b[7],b[8],b[9],b[10] = b[1]+hx,b[2]+hy,b[3]+hz,sqrt(hx*hx+hy*hy+hz*hz)
   end
-  state,row,quad,assist = "splash",1,1,false
+  state,row,quad,assist = "splash",1,1,useChannels
   invertPitch,reverseThrottle = false,false
   screenStart,savedPB = getTime(),readPB()
 end
@@ -453,23 +510,31 @@ local function run(event)
       if state=="menu" then return 1 end
       state,row = "menu",5
     else
-      local rows = state=="menu" and 5 or 3
+      local rows = state=="menu" and 6 or 4
       if nextRow then row=row%rows+1 end
       if prevRow then row=(row-2)%rows+1 end
       if enter then
         if state=="setup" then
           if row==1 then invertPitch=not invertPitch
           elseif row==2 then reverseThrottle=not reverseThrottle
+          elseif row==3 then bindControls(not useChannels)
           else state,row = "menu",5 end
         elseif row<=2 then prepare(row==2,now)
         elseif row==3 then quad=quad%#quads+1
         elseif row==4 then assist=not assist
-        else state,row = "setup",1 end
+        elseif row==5 then state,row = "setup",1
+        else state = "pick" end
       end
     end
+  elseif state=="pick" then
+    if nextRow then drillGate=drillGate%#gates+1 end
+    if prevRow then drillGate=(drillGate-2)%#gates+1 end
+    if exit then state,row="menu",6
+    elseif enter then prepare(false,now,true) end
   elseif state=="ready" then
-    if exit then state="menu"
-    elseif enter and throttle<=0.08 then
+    local armed = drill and abs(throttle-9.81/quads[quad].thrust)<=0.05
+    if exit then state=drill and "pick" or "menu"
+    elseif enter and (armed or (not drill and throttle<=0.08)) then
       if racing then state,countStart = "count",now
       else state,frameTime = "fly",now end
     end
@@ -487,7 +552,7 @@ local function run(event)
       local roll,pitch,yaw = expo(stick(4)),expo(stick(2)),expo(stick(1))
       if invertPitch then pitch=-pitch end
       for i=1,steps do
-        if racing then raceTime=raceTime+stepTime end
+        if racing or drill then raceTime=raceTime+stepTime end
         physics(0.02,throttle,roll,pitch,yaw)
         if state~="fly" then break end
       end
@@ -496,8 +561,11 @@ local function run(event)
     if nextRow then row=row%3+1 end
     if prevRow then row=(row-2)%3+1 end
     if exit or (enter and row==1) then state,frameTime = "fly",now
-    elseif enter and row==2 then prepare(racing,now)
-    elseif enter and row==3 then state,row = "menu",racing and 2 or 1 end
+    elseif enter and row==2 then prepare(racing,now,drill)
+    elseif enter and row==3 then state,row = "menu",drill and 6 or racing and 2 or 1 end
+  elseif state=="drillResult" then
+    if exit then state="pick"
+    elseif enter then prepare(false,now,true) end
   elseif state=="result" then
     if exit then state,row = "menu",racing and 2 or 1
     elseif enter then prepare(racing,now) end
@@ -507,6 +575,17 @@ local function run(event)
   if state=="splash" then splash()
   elseif state=="menu" then menu()
   elseif state=="setup" then settings()
+  elseif state=="pick" then
+    label(2,1,"GATE PRACTICE",small+inverse)
+    label(4,15,"<  Gate "..drillGate.." / "..#gates.."  >")
+    label(4,30,"Start in a level hover",small)
+    label(4,40,"7m from the gate",small)
+    label(4,55,"ENT Select   RTN Back",small)
+  elseif state=="drillResult" then
+    label(2,1,"GATE "..gateIndex.." / CLEAR",small+inverse)
+    label(4,16,formatTime(raceTime),DBLSIZE or 0)
+    label(4,38,"Session best  "..formatTime(drillRecord),small)
+    label(4,55,"ENT Retry   RTN Gates",small)
   elseif state=="result" then
     label(3,2,"IRONWORKS / RESULTS",small+inverse)
     label(4,14,resultPB and "NEW PERSONAL BEST" or "RACE COMPLETE")
@@ -517,9 +596,15 @@ local function run(event)
     renderWorld()
     hud(throttle)
     if state=="ready" then
-      panel(racing and "GATE RACE" or "BANDO FREESTYLE",
+      local hint = throttle>0.08 and "Lower throttle" or "ENT Start   RTN Back"
+      if drill then
+        local hover = 9.81/quads[quad].thrust
+        hint = abs(throttle-hover)<=0.05 and "ENT Start   RTN Back"
+          or string.format("Set throttle to %d%%",floor(hover*100+0.5))
+      end
+      panel(drill and ("PRACTICE G"..gateIndex) or racing and "GATE RACE" or "BANDO FREESTYLE",
         quads[quad].name.." / "..(assist and "Angle" or "Acro"),
-        throttle>0.08 and "Lower throttle" or "ENT Start   RTN Back")
+        hint)
     elseif state=="count" then
       panel("START IN "..tostring(max(1,3-floor((now-countStart)/100))),
         "Fly gates in order","Keep throttle low")
