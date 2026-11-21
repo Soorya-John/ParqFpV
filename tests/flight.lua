@@ -25,12 +25,22 @@ end
 function getValue(id) return assert(axes[id],"unbound source "..tostring(id)) end
 
 local dir="/SCRIPTS/TOOLS/"
+local failWrite
 local files={[dir.."ParqPB.dat"]="222.34",[dir.."ParqSwt.dat"]="bad"}
 io.open=function(path,mode)
-  if mode=="w" or files[path] then return path end
+  if mode=="w" then files[path]=""; return path end
+  if files[path] then return path end
 end
 io.read=function(path) return files[path] end
-io.write=function(path,s) files[path]=s end
+io.write=function(path,s)
+  if failWrite then files[path]=s:sub(1,-2); return nil end
+  files[path]=s
+  return path
+end
+local function stored(path)
+  local data = files[dir..path] or ""
+  return tonumber(data:match("^P(%d+%.%d%d)\n$") or data)
+end
 io.close=function() end
 
 local game=dofile("SCRIPTS/TOOLS/ParqFpV.lua")
@@ -122,10 +132,10 @@ local crossing=value(physics,"gateCrossing")
 local moveAxis=value(physics,"moveAxis")
 local runner=value(fly,"advanceRun")
 
-local function cross(g,sign,verticalOffset)
-  set(physics,"x",g[1]-sign*g[6]*0.04)
+local function cross(g,sign,verticalOffset,side)
+  set(physics,"x",g[1]-sign*g[6]*0.04+(side or 0)*g[7])
   set(physics,"y",g[2]+verticalOffset)
-  set(physics,"z",g[3]-sign*g[7]*0.04)
+  set(physics,"z",g[3]-sign*g[7]*0.04-(side or 0)*g[6])
   set(physics,"vx",sign*g[6]*5)
   set(physics,"vy",0)
   set(physics,"vz",sign*g[7]*5)
@@ -140,12 +150,16 @@ for _,course in ipairs(circuits) do
   axes[3]=-1024
   tick(enter)
   expect("START IN 3")
-  for i=1,151 do tick() end
+  for i=1,150 do tick() end
+  now=now+100
+  assert(game.run(0)==0)
+  assert(math.abs(value(fly,"raceTime")-0.10)<1e-8)
   local gates=value(crossing,"gates")
   assert(#gates==course.n)
   assert((value(moveAxis,"boxCount")==0)==(course.name~="Ironworks"))
   cross(gates[1],-1,0)
   cross(gates[1],1,4)
+  cross(gates[1],1,0,gates[1][4]-0.05)
   expect("L1/3  G1/"..#gates)
   local before={}
   for key,v in pairs(files) do before[key]=v end
@@ -157,9 +171,10 @@ for _,course in ipairs(circuits) do
     end
   end
   expect("NEW PERSONAL BEST")
-  assert(tonumber(files[dir..course.file])>0)
+  local slot = course.name=="Ironworks" and course.file..".bak.dat" or course.file
+  assert(stored(slot)>0)
   for key,v in pairs(before) do
-    if key~=dir..course.file then assert(files[key]==v) end
+    if key~=dir..slot then assert(files[key]==v) end
   end
   tick(enter)
   expect(course.name)
@@ -167,6 +182,41 @@ for _,course in ipairs(circuits) do
   tick(back)
 end
 print("All four three-lap races, splits, aperture misses, direction and independent PB files passed")
+
+-- Fly the Ironworks route from takeoff through the lap seam using only sticks.
+boot("Pocket")
+choose("Flight: Acro")
+choose("Gate race / 3 laps")
+choose("Classic  Ironworks")
+tick(enter)
+for i=1,150 do tick() end
+local waypoints={
+  {0,2.2,11,2},{0,2.5,26,3},{0,5,29},{11,5,29,4},
+  {24.8,6.4,29,5},{25,3.7,14,6},{22,2.8,-1,7},
+  {15,2.5,-5},{10,2.5,-5,8},{0,2.2,-5},{0,2.2,-1,1}
+}
+local function limit(v,m)
+  return math.max(-m,math.min(m,v))
+end
+for i,target in ipairs(waypoints) do
+  local reached
+  for frame=1,650 do
+    local dx = target[1]-value(physics,"x")
+    local dy = target[2]-value(physics,"y")
+    local dz = target[3]-value(physics,"z")
+    reached = target[4] and value(crossing,"gateIndex")==target[4]
+      or not target[4] and math.max(math.abs(dx),math.abs(dy),math.abs(dz))<0.3
+    if reached then break end
+    axes[4]=limit(dx*0.34-value(physics,"vx")*0.32,0.55)*1024
+    axes[2]=limit(dz*0.34-value(physics,"vz")*0.32,0.55)*1024
+    local lift = 9.81+limit(dy*3-value(physics,"vy")*2.7,7)
+    axes[3]=(2*lift/(22*math.max(0.75,value(physics,"uY")))-1)*1024
+    tick()
+  end
+  assert(reached,"Ironworks pilot stalled at waypoint "..i)
+end
+expect("L2/3  G1/8")
+print("Ironworks lap flown continuously from takeoff through all eight gates")
 
 boot("Pocket")
 choose("Bando freestyle")
@@ -299,8 +349,64 @@ for i=1,300 do
   if shows("ENDLESS RUN / FINISH") then break end
 end
 expect("ENDLESS RUN / FINISH")
-assert(tonumber(files[dir.."ParqRun.dat"])==value(runner,"runScore"))
+assert(stored("ParqRun.dat")==value(runner,"runScore"))
 tick(enter)
 expect("ENDLESS RUN")
 assert(queue[2][1]~=firstLayout and value(runner,"runScore")==0)
 print("Endless Run cleared 100 procedural gates on stick inputs, saved the best and generated a fresh retry")
+
+local save = value(runner,"saveRecord")
+local record = value(runner,"runRecord")
+local previousBest = record.best
+failWrite = true
+assert(save(record,previousBest+2)=="unsaved")
+assert(stored("ParqRun.dat")==previousBest and not stored("ParqRun.dat.bak.dat"))
+local recovered = {file=record.file,count=true}
+value(game.init,"loadRecord")(recovered)
+assert(recovered.best==previousBest)
+failWrite = false
+save(record,previousBest+1)
+value(game.init,"loadRecord")(recovered)
+assert(recovered.best==previousBest+2)
+print("A partial score write preserves the previous record and a lower score retries the pending best")
+
+
+-- Restart and leave through the normal menus while the score write fails.
+tick(enter)
+set(runner,"runScore",record.best+1)
+failWrite = true
+tick(back)
+choose("Restart")
+expect("UNSAVED")
+tick(enter)
+tick(back)
+choose("Main menu")
+expect("BEST UNSAVED")
+tick(back)
+expect("BEST NOT SAVED")
+assert(highlight=="Retry save")
+tick(enter)
+expect("BEST NOT SAVED")
+tick(back)
+expect("BEST UNSAVED")
+tick(back)
+failWrite = false
+now=now+2
+assert(game.run(enter)==1)
+value(game.init,"loadRecord")(recovered)
+assert(recovered.best==previousBest+3)
+print("Pending best is visible after restart and menu return, then saves on exit")
+
+
+boot("Pocket")
+failWrite = true
+assert(save(record,previousBest+4)=="unsaved")
+tick(back)
+expect("BEST NOT SAVED")
+tick(nextKey)
+assert(highlight=="Discard and exit")
+now=now+2
+assert(game.run(enter)==1)
+value(game.init,"loadRecord")(recovered)
+assert(recovered.best==previousBest+3)
+print("Explicit discard exits while preserving the last saved best")

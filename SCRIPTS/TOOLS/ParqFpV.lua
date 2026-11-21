@@ -193,7 +193,8 @@ local screenStart, frameTime, countStart
 local drill, drillGate, drillBest, drillRecord
 local motor, rollRate, pitchRate, yawRate
 local lapMarks, bestMarks, splitText, splitUntil
-local endless, runScore, runBest, runSpeed, randomState
+local endless, runScore, runSpeed, randomState
+local runRecord = {file="ParqRun.dat", count=true}
 local runGates = {{},{},{}}
 local x,y,z, vx,vy,vz, qw,qx,qy,qz
 local stickIds = {}
@@ -417,16 +418,54 @@ end
 local function readPB(name,limit)
   local file = io.open(dataDir..name,"r")
   if not file then return 0 end
-  local value = tonumber(io.read(file,16))
+  local data = io.read(file,16) or ""
   io.close(file)
-  return value and value>0 and value<(limit or 36000) and value or 0
+  if data:sub(1,1)=="P" then data = data:match("^P(%d+%.%d%d)\n$") end
+  local value = tonumber(data)
+  return value and value>0 and value<limit and value or 0
 end
 
-local function writePB(name,value)
-  local file = io.open(dataDir..name,"w")
-  if not file then return end
-  io.write(file,string.format("%.2f",value))
-  io.close(file)
+local function loadRecord(record)
+  record.limit = record.count and 10000000 or 36000
+  local primary = readPB(record.file,record.limit)
+  local alternate = readPB(record.file..".bak.dat",record.limit)
+  record.best,record.slot = primary,record.file
+  if alternate>0 and (primary==0 or (record.count and alternate>primary)
+      or (not record.count and alternate<primary)) then
+    record.best,record.slot = alternate,record.file..".bak.dat"
+  end
+  if record.count then record.best=floor(record.best) end
+  record.saved = record.best
+end
+
+local function saveRecord(record,value)
+  value = tonumber(string.format("%.2f",value))
+  local improved = value>0 and value<record.limit and (record.best==0
+    or (record.count and value>record.best) or (not record.count and value<record.best))
+  if improved then record.best=value end
+  if record.best==record.saved then return end
+
+  -- Keep the last valid slot intact until the new score survives a read-back.
+  local alternate = record.file..".bak.dat"
+  local slot = record.slot==record.file and record.saved>0 and alternate or record.file
+  local file = io.open(dataDir..slot,"w")
+  if file then
+    local wrote = io.write(file,"P"..string.format("%.2f",record.best).."\n")
+    io.close(file)
+    if wrote and readPB(slot,record.limit)==record.best then
+      record.saved,record.slot = record.best,slot
+      return improved and "saved" or nil
+    end
+  end
+  return "unsaved"
+end
+
+local function flushRecords()
+  local failed = saveRecord(runRecord,0)=="unsaved"
+  for _,course in ipairs(courses) do
+    if saveRecord(course,0)=="unsaved" then failed=true end
+  end
+  return not failed
 end
 
 -- A fixed ring holds six seconds of freestyle at five samples per second.
@@ -500,7 +539,7 @@ local function prepare(isRace,now,isDrill)
   endless,racing,drill,lap = false,isRace,isDrill,1
   gateIndex = drill and drillGate or 1
   if racing then lapMarks,bestMarks,splitText,splitUntil = {},{},nil,0 end
-  lapStart,raceTime,bestLap,resultPB = 0,0,0,false
+  lapStart,raceTime,bestLap,resultPB = 0,0,0,nil
   if racing or drill then
     loadSite(gates==ironGates and sites[1] or nil)
   else
@@ -513,17 +552,17 @@ local function prepare(isRace,now,isDrill)
 end
 
 -- nil means no forward crossing, false means the quad missed the opening.
-local function throughGate(g,ox,oy,oz)
+local function throughGate(g,ox,oy,oz,radius)
   local nx,nz = g[6],g[7]
   local before,after = (ox-g[1])*nx+(oz-g[3])*nz,(x-g[1])*nx+(z-g[3])*nz
   if before>=0 or after<0 then return end
   local t = -before/(after-before)
   local crossX,crossY,crossZ = ox+(x-ox)*t,oy+(y-oy)*t,oz+(z-oz)*t
-  return abs((crossX-g[1])*nz-(crossZ-g[3])*nx)<=g[4] and abs(crossY-g[2])<=g[5]
+  return abs((crossX-g[1])*nz-(crossZ-g[3])*nx)<=g[4]-radius and abs(crossY-g[2])<=g[5]-radius
 end
 
 local function gateCrossing(ox,oy,oz)
-  if not throughGate(gates[gateIndex],ox,oy,oz) then return end
+  if not throughGate(gates[gateIndex],ox,oy,oz,quads[quad].radius) then return end
   if drill then
     local records = drillBest[selectedCourse]
     local key = (quad-1)*#gates+gateIndex+(assist and #quads*#gates or 0)
@@ -547,11 +586,7 @@ local function gateCrossing(ox,oy,oz)
   lapStart,gateIndex,lap = raceTime,1,lap+1
   if lap>LAPS then
     state = "result"
-    local course = courses[selectedCourse]
-    if course.best==0 or raceTime<course.best then
-      course.best,resultPB = raceTime,true
-      writePB(course.file,raceTime)
-    end
+    resultPB = saveRecord(courses[selectedCourse],raceTime)
   end
 end
 
@@ -580,7 +615,7 @@ end
 local function prepareRun(now)
   endless,racing,drill = true,false,false
   loadSite(nil)
-  runScore,runSpeed,resultPB = 0,6,false
+  runScore,runSpeed,resultPB = 0,6,nil
   randomState = ((randomState or 0)+now+4051)%65536
   local first = runGates[1]
   first[1],first[2],first[3],first[4],first[5],first[6],first[7] = 0,3.5,13,3.9,2.2,0,1
@@ -590,14 +625,6 @@ local function prepareRun(now)
   qw,qx,qy,qz,camCos,camSin = 1,0,0,0,1,0
   basis()
   state,frameTime = "ready",now
-end
-
-local function saveRun()
-  resultPB = runScore>runBest
-  if resultPB then
-    runBest = runScore
-    writePB("ParqRun.dat",runBest)
-  end
 end
 
 local function advanceRun(dt,steer,pitch)
@@ -610,10 +637,10 @@ local function advanceRun(dt,steer,pitch)
   qw,qx,qy,qz = cp*cb,sp*cb,-sp*sb,cp*sb
   basis()
   local first = runGates[1]
-  local passed = throughGate(first,ox,oy,oz)
+  local passed = throughGate(first,ox,oy,oz,0)
   if passed==nil then return end
   if not passed then
-    saveRun()
+    resultPB = saveRecord(runRecord,runScore)
     state = "runResult"
     return
   end
@@ -726,6 +753,11 @@ end
 
 local function menu()
   label(2,0,"ParqFpV",small+inverse)
+  local unsaved = runRecord.best~=runRecord.saved
+  for _,course in ipairs(courses) do
+    if course.best~=course.saved then unsaved=true; break end
+  end
+  if unsaved then label(60,0,"BEST UNSAVED",small+inverse) end
   menuItem(1,"Bando freestyle")
   menuItem(2,"Gate race / 3 laps")
   menuItem(3,"Endless Run")
@@ -764,7 +796,7 @@ local function hud(throttle)
     label(0,0,"GATES "..runScore,small+inverse)
     label(78,0,"LEVEL "..(1+floor(runScore/5)),small)
     label(0,56,string.format("%.1fm/s",runSpeed),small)
-    label(78,56,"BEST "..runBest,small)
+    label(74,56,runRecord.best~=runRecord.saved and "UNSAVED" or "BEST "..runRecord.best,small)
     return
   elseif racing then
     label(0,0,string.format("L%d/%d  G%d/%d",min(lap,LAPS),LAPS,gateIndex,#gates),small)
@@ -787,10 +819,10 @@ local function init()
   bindControls(string.find(string.lower(radio or ""),"mt12",1,true)~=nil)
   drillGate,drillBest = 1,{}
   for i,course in ipairs(courses) do
-    course.best = readPB(course.file)
+    loadRecord(course)
     drillBest[i] = {}
   end
-  runBest = floor(readPB("ParqRun.dat",10000000))
+  loadRecord(runRecord)
   selectCourse(1)
   selectedSite = 1
   state,row,quad,assist = "splash",1,1,useChannels
@@ -828,8 +860,8 @@ end
 local function fly(now,throttle)
   local elapsed = floor((now-frameTime)/2)
   if elapsed<1 then return end
+  -- Drop excess time after a stall for both the flight and its timer.
   local steps = min(5,elapsed)
-  local stepTime = elapsed*0.02/steps
   frameTime = now-(now-frameTime)%2
   local roll,pitch,yaw = expo(stick(4)),expo(stick(2)),expo(stick(1))
   if invertPitch then pitch=-pitch end
@@ -837,7 +869,7 @@ local function fly(now,throttle)
     if endless then
       advanceRun(0.02,clamp(roll+yaw,-1,1),pitch)
     else
-      if racing or drill then raceTime=raceTime+stepTime end
+      if racing or drill then raceTime=raceTime+0.02 end
       physics(0.02,throttle,roll,pitch,yaw)
       if not racing and not drill then
         flightTick = flightTick+1
@@ -857,11 +889,11 @@ local function pauseInput(enter,exit,nextRow,prevRow,now)
     if freestyle() and row==2 then openRewind()
     elseif row==rows-1 then
       if endless then
-        saveRun()
+        saveRecord(runRecord,runScore)
         prepareRun(now)
       else prepare(racing,now,drill) end
     else
-      if endless then saveRun() end
+      if endless then saveRecord(runRecord,runScore) end
       state,row="menu",endless and 3 or drill and 4 or racing and 2 or 1
     end
   end
@@ -872,6 +904,11 @@ local function drawScreen(throttle,now)
   if state=="splash" then splash()
   elseif state=="menu" then menu()
   elseif state=="setup" then settings()
+  elseif state=="exitUnsaved" then
+    label(2,0,"BEST NOT SAVED",small+inverse)
+    menuItem(1,"Retry save")
+    menuItem(2,"Discard and exit")
+    label(2,56,"ENT Select  RTN Back",small)
   elseif state=="races" or state=="drills" then courseMenu()
   elseif state=="pick" then
     label(2,1,courses[selectedCourse].name.." / PRACTICE",small+inverse)
@@ -886,15 +923,17 @@ local function drawScreen(throttle,now)
     label(4,55,"ENT Retry   RTN Gates",small)
   elseif state=="result" then
     label(3,2,courses[selectedCourse].name.." / RESULTS",small+inverse)
-    label(4,14,resultPB and "NEW PERSONAL BEST" or "RACE COMPLETE")
+    label(4,14,resultPB=="unsaved" and "BEST NOT SAVED"
+      or resultPB=="saved" and "NEW PERSONAL BEST" or "RACE COMPLETE")
     label(4,28,"Total  "..formatTime(raceTime),small)
     label(4,38,"Best lap  "..formatTime(bestLap),small)
     label(4,55,"ENT Retry   RTN Menu",small)
   elseif state=="runResult" then
     label(2,1,"ENDLESS RUN / FINISH",small+inverse)
     label(4,15,runScore.." gates",DBLSIZE or 0)
-    label(4,37,"Level "..(1+floor(runScore/5)).."   Best "..runBest,small)
-    label(4,46,resultPB and "New personal best" or "Missed gate "..(runScore+1),small)
+    label(4,37,"Level "..(1+floor(runScore/5)).."   Best "..runRecord.best,small)
+    label(4,46,resultPB=="unsaved" and "Best not saved"
+      or resultPB=="saved" and "New personal best" or "Missed gate "..(runScore+1),small)
     label(4,56,"ENT New run   RTN Menu",small)
   elseif state=="rewind" then
     renderWorld()
@@ -953,10 +992,18 @@ local function run(event)
   if state=="splash" then
     if exit then return 1 end
     if enter or now-screenStart>=180 then state="menu" end
+  elseif state=="exitUnsaved" then
+    if exit then state,row="menu",1
+    elseif nextRow or prevRow then row=3-row
+    elseif enter and (row==2 or flushRecords()) then return 1 end
   elseif state=="menu" or state=="setup" then
     if exit then
-      if state=="menu" then return 1 end
-      state,row = "menu",7
+      if state=="menu" then
+        if flushRecords() then return 1 end
+        state,row = "exitUnsaved",1
+      else
+        state,row = "menu",7
+      end
     else
       local rows = state=="menu" and 7 or 4
       if nextRow then row=row%rows+1 end

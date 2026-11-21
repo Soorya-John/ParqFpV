@@ -56,7 +56,7 @@ Fly three laps through the numbered gates in order and in the marked direction. 
 | 3 · Highline | 10 | Climb to 12.5 m, descend through a chicane and line up 4.5 m wide gates. |
 | Classic · Ironworks | 8 | Race through the warehouse, around the upper floor and back past the containers. |
 
-Each circuit keeps its own three-lap best on the SD card. Ironworks continues to use the original `ParqPB.dat` record. Results also show your fastest lap.
+Each circuit keeps its own three-lap best on the SD card. Ironworks continues to use the original `ParqPB.dat` record. Results also show your fastest lap. Keep both the original score files and any matching `.bak.dat` files when upgrading. The game alternates between those files so a failed write leaves the previous best recoverable.
 
 An arrow at the edge of the view points toward the active gate. A bar behind a sideways arrow means the gate is behind you. On the first lap, each crossing flashes the time since lap start. On later laps it shows the difference against the same gate on your fastest completed lap of this race. A negative split means you're ahead.
 
@@ -66,10 +66,10 @@ An arrow at the edge of the view points toward the active gate. A bar behind a s
 
 Lower the throttle and press **ENT**. The quad flies forward automatically. Use roll or yaw to steer sideways, pull pitch to climb and push to dive. Steer through the solid frame and look for the dotted gate beyond it.
 
-Every five clears raise the level. Speed builds from 6 m/s, openings narrow, and new gates can move farther sideways or vertically. A miss ends the run. **ENT** generates a fresh route. Your best gate count is saved in `ParqRun.dat` when a run ends or you leave it through the pause menu.
+Every five clears raise the level. Speed builds from 6 m/s, openings narrow, and new gates can move farther sideways or vertically. A miss ends the run. **ENT** generates a fresh route. Your best gate count is saved in the `ParqRun.dat` score pair when a run ends or you leave it through the pause menu.
 
 ## Verification
 
-Run `lua tests/flight.lua` from the repository root using Lua 5.2. The tests fly every practice approach on all eight input profiles, check all four circuits' scoring and record files, test openings and collisions in the five bandos, and replay a manoeuvre after rewinding to verify the flight state. A stick-driven test pilot clears 100 procedural gates in one run. Companion checks cover the monochrome display. Frame rate and stick feel still need playtesting on physical radios.
+Run `lua tests/flight.lua` from the repository root using Lua 5.2. The tests fly every practice approach on all eight input profiles, check all four circuits' scoring and record recovery, fly an entire Ironworks lap, test openings and collisions in the five bandos, and replay a manoeuvre after rewinding to verify the flight state. A stick-driven test pilot clears 100 procedural gates in one run. Companion checks cover the monochrome display. Frame rate and stick feel still need playtesting on physical radios.
 
 - [EdgeTX one-time tool scripts](https://luadoc.edgetx.org/latest/api-overview/script-types/one-time-scripts/)
