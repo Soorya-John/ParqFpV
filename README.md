@@ -11,6 +11,8 @@ A first-person quad simulator for monochrome RadioMaster transmitters, by soorya
 
 Use the roller or the radio's next/previous keys to navigate. **ENT** confirms and **RTN** pauses in flight or goes back in menus. Impacts stop motion into the surface and let you keep flying from where you hit. To reset manually, press **RTN** and select **Restart**. **Stick setup** shows all four live axes and allows pitch and throttle reversal for the session.
 
+To move your saved records to another SD card, copy the ParqFpV score files from the original card to the same location on the new card. Keep each backup alongside its matching score file.
+
 ## Radio compatibility
 
 | RadioMaster family | Companion target exercised | Default controls |
